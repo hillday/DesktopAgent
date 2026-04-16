@@ -13,8 +13,7 @@ Minimal macOS/Windows desktop agent app:
 
 ```bash
 cd desktop_agent_app
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+
 pip install -r requirements.txt
 ```
 
