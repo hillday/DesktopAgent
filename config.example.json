@@ -1,0 +1,15 @@
+{
+  "provider": "doubao",
+  "model": "doubao-seed-1-8-251228",
+  "planner_model": "",
+  "executor_model": "",
+  "verifier_model": "",
+  "api_key_env": "ARK_API_KEY",
+  "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+  "openrouter_referer": "",
+  "openrouter_title": "desktop-agent-app",
+  "max_turns": 60,
+  "screenshot_delay_ms": 500,
+  "hitl": false,
+  "auto_minimize_on_send": true
+}
