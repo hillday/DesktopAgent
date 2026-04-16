@@ -81,6 +81,7 @@ def _normalize_llm_string(value: Any) -> str:
 def _apply_mouse_move(x: int, y: int) -> None:
     st = get_screen_state()
     x = _clamp(int(x), 0, st.width - 1)
+    y = _clamp(int(y), 0, st.height - 1)
     pyautogui.moveTo(x, y, duration=0.05)
 
 
@@ -266,12 +267,13 @@ def execute_action(action: Dict[str, Any]) -> Dict[str, Any]:
             return out
 
     if t == "scroll":
-        # pyautogui.scroll is vertical only; accept scrollY.
+        # Agent semantics: positive scrollY means scroll down the page.
+        # pyautogui.scroll uses the opposite sign on major desktop platforms.
         x = int(action.get("x", pyautogui.position().x))
         y = int(action.get("y", pyautogui.position().y))
         _apply_mouse_move(x, y)
         scroll_y = int(action.get("scrollY", action.get("scroll_y", 0)))
-        pyautogui.scroll(scroll_y)
+        pyautogui.scroll(-scroll_y)
         return out
 
     if t == "type":
