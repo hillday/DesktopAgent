@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from config import AppConfig, get_api_key, make_default_headers
-from openai import OpenAI
+from openai import OpenAI, APIConnectionError, APIStatusError
 
 
 @dataclass
@@ -42,13 +43,42 @@ def make_openai_client(cfg: AppConfig) -> OpenAI:
     return OpenAI(api_key=api_key, base_url=base_url, default_headers=headers)
 
 
+_LLM_TIMEOUT = 120  # seconds per request
+_MAX_RETRIES = 3
+_RETRY_BACKOFF = [2, 5, 15]  # seconds between retries
+
+
+def _is_retryable(exc: Exception) -> bool:
+    if isinstance(exc, APIConnectionError):
+        return True
+    if isinstance(exc, APIStatusError) and exc.status_code in (429, 500, 502, 503, 504):
+        return True
+    return False
+
+
+def _llm_create_with_retry(create_fn, **kwargs):
+    """Call create_fn(**kwargs) with timeout and exponential-backoff retry."""
+    last_exc: Exception | None = None
+    for attempt in range(_MAX_RETRIES):
+        try:
+            return create_fn(timeout=_LLM_TIMEOUT, **kwargs)
+        except Exception as e:
+            if not _is_retryable(e) or attempt == _MAX_RETRIES - 1:
+                raise
+            last_exc = e
+            wait = _RETRY_BACKOFF[attempt]
+            time.sleep(wait)
+    raise last_exc  # unreachable but satisfies type checkers
+
+
 def chat_with_tools(
     client: OpenAI,
     model: str,
     messages: List[Dict[str, Any]],
     tools: List[Dict[str, Any]],
 ) -> LLMResult:
-    resp = client.chat.completions.create(
+    resp = _llm_create_with_retry(
+        client.chat.completions.create,
         model=model,
         messages=messages,
         tools=tools,

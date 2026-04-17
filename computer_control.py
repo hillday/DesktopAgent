@@ -45,10 +45,13 @@ def get_screen_state() -> ComputerState:
     return ComputerState(width=int(w), height=int(h))
 
 
-def screenshot_base64() -> str:
+def screenshot_base64(jpeg_quality: int = 85) -> str:
     img = pyautogui.screenshot()
+    # Convert to RGB (JPEG does not support RGBA/palette modes).
+    if img.mode != "RGB":
+        img = img.convert("RGB")
     buf = BytesIO()
-    img.save(buf, format="PNG")
+    img.save(buf, format="JPEG", quality=jpeg_quality, optimize=True)
     return base64.b64encode(buf.getvalue()).decode("utf-8")
 
 

@@ -9,7 +9,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from computer_control import execute_action, get_screen_state, screenshot_base64
 from config import AppConfig
-from llm_client import chat_with_tools, make_openai_client
+from llm_client import chat_with_tools, make_openai_client, _llm_create_with_retry
 
 
 def _extract_json_object(text: str) -> Dict[str, Any]:
@@ -183,14 +183,14 @@ class DesktopPlannerAgent:
                 {
                     "type": "image_url",
                     "image_url": {
-                        "url": f"data:image/png;base64,{before_screenshot_b64}",
+                        "url": f"data:image/jpeg;base64,{before_screenshot_b64}",
                         "detail": "high",
                     },
                 },
                 {
                     "type": "image_url",
                     "image_url": {
-                        "url": f"data:image/png;base64,{after_screenshot_b64}",
+                        "url": f"data:image/jpeg;base64,{after_screenshot_b64}",
                         "detail": "high",
                     },
                 },
@@ -198,7 +198,8 @@ class DesktopPlannerAgent:
         else:
             user_content = prompt
 
-        resp = self.client.chat.completions.create(
+        resp = _llm_create_with_retry(
+            self.client.chat.completions.create,
             model=self._model_for_role("planner"),
             messages=[
                 {"role": "system", "content": "You output only JSON."},
@@ -367,7 +368,7 @@ class DesktopPlannerAgent:
                         {
                             "type": "image_url",
                             "image_url": {
-                                "url": f"data:image/png;base64,{screenshot_b64}",
+                                "url": f"data:image/jpeg;base64,{screenshot_b64}",
                                 "detail": "high",
                             },
                         },
@@ -416,7 +417,8 @@ class DesktopPlannerAgent:
             f"Previous verifier note:\n{loop_state.last_verifier_message or '(none)'}\n\n"
             f"Last event:\n{last_event}\n"
         )
-        resp = self.client.chat.completions.create(
+        resp = _llm_create_with_retry(
+            self.client.chat.completions.create,
             model=self._model_for_role("verifier"),
             messages=[
                 {"role": "system", "content": "You output only JSON."},
@@ -427,14 +429,14 @@ class DesktopPlannerAgent:
                         {
                             "type": "image_url",
                             "image_url": {
-                                "url": f"data:image/png;base64,{before_screenshot_b64}",
+                                "url": f"data:image/jpeg;base64,{before_screenshot_b64}",
                                 "detail": "high",
                             },
                         },
                         {
                             "type": "image_url",
                             "image_url": {
-                                "url": f"data:image/png;base64,{after_screenshot_b64}",
+                                "url": f"data:image/jpeg;base64,{after_screenshot_b64}",
                                 "detail": "high",
                             },
                         },
@@ -541,13 +543,24 @@ class DesktopPlannerAgent:
         loop_state.status = "blocked"
         self._log("[system] blocked")
 
-    def _handle_verifier_update(self, loop_state: LoopState, verification: Dict[str, str]) -> None:
+    def _handle_verifier_update(
+        self,
+        loop_state: LoopState,
+        verification: Dict[str, str],
+        supervisor_already_handled: bool = False,
+    ) -> None:
         status = verification.get("status", "continue")
         message = verification.get("message", "")
         loop_state.last_verifier_message = message
         self._log(f"[verifier] {status}: {message}")
 
         if status == "continue":
+            return
+        # If the supervisor already advanced/completed the step this turn, skip
+        # duplicate step_done / task_done / replan_required from the verifier to
+        # avoid double-advancing the step index.
+        if supervisor_already_handled and status in ("step_done", "task_done", "replan_required"):
+            self._log(f"[verifier] skipped '{status}' (supervisor already handled this turn)")
             return
         if status == "step_done":
             loop_state.current_step_index += 1
@@ -608,6 +621,8 @@ class DesktopPlannerAgent:
 
             if tc.name == "supervisor_update":
                 self._log("[loop] supervise")
+                sup_status = str((tc.arguments or {}).get("status", ""))
+                supervisor_advanced = sup_status in ("step_done", "task_done", "replan_required")
                 self._handle_supervisor_update(loop_state, tc.arguments)
                 if loop_state.status != "running":
                     return
@@ -625,7 +640,7 @@ class DesktopPlannerAgent:
                         "Supervisor proposed: " + json.dumps(tc.arguments, ensure_ascii=False)
                     ),
                 )
-                self._handle_verifier_update(loop_state, verification)
+                self._handle_verifier_update(loop_state, verification, supervisor_already_handled=supervisor_advanced)
                 return
 
         loop_state.status = "blocked"
