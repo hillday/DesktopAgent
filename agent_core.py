@@ -57,6 +57,35 @@ def _provider_uses_normalized_coords(provider: str) -> bool:
     return (provider or "").strip().lower() == "doubao"
 
 
+_COMPUTER_ACTION_NAMES = {
+    "screenshot",
+    "click",
+    "double_click",
+    "right_click",
+    "move",
+    "scroll",
+    "type",
+    "keypress",
+    "wait",
+    "drag",
+    "open_browser",
+    "focus_address_bar",
+    "open_url",
+    "search_text",
+    "paste_text",
+}
+
+
+def _normalize_tool_call(name: str, arguments: Any) -> tuple[str, Dict[str, Any]]:
+    tool_name = str(name or "").strip()
+    args = arguments if isinstance(arguments, dict) else {}
+    if tool_name in _COMPUTER_ACTION_NAMES:
+        normalized = dict(args)
+        normalized.setdefault("action", tool_name)
+        return "computer", normalized
+    return tool_name, args
+
+
 def _denormalize_xy(nx: Any, ny: Any, width: int, height: int) -> tuple[int, int]:
     width = max(1, int(width))
     height = max(1, int(height))
@@ -227,7 +256,11 @@ class DesktopPlannerAgent:
             "type": "function",
             "function": {
                 "name": "computer",
-                "description": f"Control the user's real computer. {coord_desc}",
+                "description": (
+                    "Control the user's real computer. "
+                    "This is the only tool for UI actions: wrap clicks, typing, keypresses, scrolling, "
+                    f"navigation, and waits inside `computer` via the `action` field. {coord_desc}"
+                ),
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -324,6 +357,9 @@ class DesktopPlannerAgent:
             "1. Call `computer` with exactly ONE next UI action, OR\n"
             "2. Call `supervisor_update` to mark step_done/task_done/blocked/replan_required.\n\n"
             "Guidelines:\n"
+            "- The only valid top-level tool names are `computer` and `supervisor_update`.\n"
+            "- Never emit raw action names like `click`, `keypress`, `paste_text`, `open_url`, or `scroll` as top-level tool calls.\n"
+            "- Put every UI action inside `computer` using the `action` field. Correct: `computer({\"action\":\"click\", ...})`. Incorrect: `click({...})`.\n"
             "- Prefer screenshot-first reasoning when unsure.\n"
             "- Use small, verifiable actions.\n"
             "- Do not guess taskbar or dock icons when a keyboard-based app launch is more reliable.\n"
@@ -598,8 +634,12 @@ class DesktopPlannerAgent:
             return
 
         for tc in result.tool_calls:
-            if tc.name == "computer":
-                action = tc.arguments if isinstance(tc.arguments, dict) else {}
+            self._log(f"[loop] tool call: {tc.name}")
+            normalized_name, normalized_args = _normalize_tool_call(tc.name, tc.arguments)
+            if normalized_name != tc.name:
+                self._log(f"[loop] normalized tool call: {tc.name} -> {normalized_name}")
+            if normalized_name == "computer":
+                action = normalized_args
                 self._log("[loop] execute")
                 self._handle_computer_tool_call(loop_state, action)
                 if loop_state.status != "running":
@@ -619,11 +659,11 @@ class DesktopPlannerAgent:
                 self._handle_verifier_update(loop_state, verification)
                 return
 
-            if tc.name == "supervisor_update":
+            if normalized_name == "supervisor_update":
                 self._log("[loop] supervise")
-                sup_status = str((tc.arguments or {}).get("status", ""))
+                sup_status = str((normalized_args or {}).get("status", ""))
                 supervisor_advanced = sup_status in ("step_done", "task_done", "replan_required")
-                self._handle_supervisor_update(loop_state, tc.arguments)
+                self._handle_supervisor_update(loop_state, normalized_args)
                 if loop_state.status != "running":
                     return
 
@@ -637,7 +677,7 @@ class DesktopPlannerAgent:
                     before_screenshot_b64=screen_b64,
                     after_screenshot_b64=screen_b64_after,
                     last_event=(
-                        "Supervisor proposed: " + json.dumps(tc.arguments, ensure_ascii=False)
+                        "Supervisor proposed: " + json.dumps(normalized_args, ensure_ascii=False)
                     ),
                 )
                 self._handle_verifier_update(loop_state, verification, supervisor_already_handled=supervisor_advanced)
